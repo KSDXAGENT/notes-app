@@ -1,83 +1,158 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabase";
 
 type Note = {
   id: string;
+  user_id: string;
   title: string;
   content: string;
-  createdAt: string;
+  created_at: string;
 };
 
 export default function Home() {
+  const router = useRouter();
   const [notes, setNotes] = useState<Note[]>([]);
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [selectedNote, setSelectedNote] = useState<Note | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
 
-  // Charger les notes depuis localStorage au démarrage
   useEffect(() => {
-    const saved = localStorage.getItem("notes");
-    if (saved) setNotes(JSON.parse(saved));
-  }, []);
+    const bootstrap = async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
 
-  // Sauvegarder automatiquement dans localStorage à chaque changement
-  useEffect(() => {
-    localStorage.setItem("notes", JSON.stringify(notes));
-  }, [notes]);
+      if (!session) {
+        router.replace("/login");
+        setLoading(false);
+        return;
+      }
 
-  function addNote() {
-    if (!title.trim()) return;
-    const newNote: Note = {
-      id: crypto.randomUUID(),
-      title,
-      content,
-      createdAt: new Date().toLocaleDateString("fr-CA"),
+      setUserId(session.user.id);
+      const { data, error } = await supabase
+        .from("notes")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        setMessage(error.message);
+      } else if (data) {
+        setNotes(data);
+      }
+
+      setLoading(false);
     };
-    setNotes([newNote, ...notes]);
+
+    void bootstrap();
+  }, [router]);
+
+  async function addNote() {
+    if (!title.trim() || !userId) return;
+
+    const { data, error } = await supabase
+      .from("notes")
+      .insert({
+        user_id: userId,
+        title: title.trim(),
+        content: content.trim(),
+      })
+      .select("*")
+      .single();
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    setNotes((prev) => (data ? [data, ...prev] : prev));
     setTitle("");
     setContent("");
+    setMessage("");
   }
 
-  function deleteNote(id: string) {
-    setNotes(notes.filter((n) => n.id !== id));
+  async function deleteNote(id: string) {
+    if (!userId) return;
+
+    const { error } = await supabase
+      .from("notes")
+      .delete()
+      .eq("id", id)
+      .eq("user_id", userId);
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    setNotes((prev) => prev.filter((note) => note.id !== id));
     if (selectedNote?.id === id) setSelectedNote(null);
+    setMessage("");
+  }
+
+  async function signOut() {
+    await supabase.auth.signOut();
+    router.replace("/login");
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-6 text-gray-500">
+        Chargement...
+      </div>
+    );
   }
 
   return (
     <div className="min-h-screen bg-gray-50 p-6">
-      <h1 className="text-3xl font-bold text-gray-800 mb-6">📝 Mes notes</h1>
+      <div className="mb-6 flex items-center justify-between">
+        <h1 className="text-3xl font-bold text-gray-800">Mes notes</h1>
+        <button
+          onClick={() => void signOut()}
+          className="rounded-lg bg-gray-700 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-800"
+        >
+          Deconnexion
+        </button>
+      </div>
+
+      {message ? (
+        <p className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">
+          {message}
+        </p>
+      ) : null}
 
       <div className="flex gap-6">
-        {/* Colonne gauche : formulaire + liste */}
-        <div className="w-1/3 flex flex-col gap-4">
-          {/* Formulaire nouvelle note */}
-          <div className="bg-white rounded-xl shadow p-4 flex flex-col gap-3">
+        <div className="flex w-1/3 flex-col gap-4">
+          <div className="flex flex-col gap-3 rounded-xl bg-white p-4 shadow">
             <input
-              className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+              className="rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
               placeholder="Titre"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
             />
             <textarea
-              className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none"
+              className="resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
               placeholder="Contenu (optionnel)"
               rows={3}
               value={content}
               onChange={(e) => setContent(e.target.value)}
             />
             <button
-              onClick={addNote}
-              className="bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded-lg py-2 transition-colors"
+              onClick={() => void addNote()}
+              className="rounded-lg bg-blue-500 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-600"
             >
               Ajouter
             </button>
           </div>
 
-          {/* Liste des notes */}
           <div className="flex flex-col gap-2">
             {notes.length === 0 && (
-              <p className="text-gray-400 text-sm text-center py-4">
+              <p className="py-4 text-center text-sm text-gray-400">
                 Aucune note pour l&apos;instant.
               </p>
             )}
@@ -85,51 +160,52 @@ export default function Home() {
               <div
                 key={note.id}
                 onClick={() => setSelectedNote(note)}
-                className={`bg-white rounded-xl shadow px-4 py-3 cursor-pointer hover:shadow-md transition-shadow border-2 ${
+                className={`cursor-pointer rounded-xl border-2 bg-white px-4 py-3 shadow transition-shadow hover:shadow-md ${
                   selectedNote?.id === note.id
                     ? "border-blue-400"
                     : "border-transparent"
                 }`}
               >
-                <div className="flex justify-between items-start">
-                  <p className="font-medium text-gray-800 text-sm truncate">
+                <div className="flex items-start justify-between">
+                  <p className="truncate text-sm font-medium text-gray-800">
                     {note.title}
                   </p>
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      deleteNote(note.id);
+                      void deleteNote(note.id);
                     }}
-                    className="text-gray-300 hover:text-red-400 text-xs ml-2 transition-colors"
+                    className="ml-2 text-xs text-gray-300 transition-colors hover:text-red-400"
                   >
-                    ✕
+                    x
                   </button>
                 </div>
-                <p className="text-gray-400 text-xs mt-1">{note.createdAt}</p>
+                <p className="mt-1 text-xs text-gray-400">
+                  {new Date(note.created_at).toLocaleDateString("fr-CA")}
+                </p>
               </div>
             ))}
           </div>
         </div>
 
-        {/* Colonne droite : détail de la note */}
-        <div className="flex-1 bg-white rounded-xl shadow p-6">
+        <div className="flex-1 rounded-xl bg-white p-6 shadow">
           {selectedNote ? (
             <>
-              <h2 className="text-xl font-bold text-gray-800 mb-2">
+              <h2 className="mb-2 text-xl font-bold text-gray-800">
                 {selectedNote.title}
               </h2>
-              <p className="text-xs text-gray-400 mb-4">
-                {selectedNote.createdAt}
+              <p className="mb-4 text-xs text-gray-400">
+                {new Date(selectedNote.created_at).toLocaleDateString("fr-CA")}
               </p>
-              <p className="text-gray-600 whitespace-pre-wrap">
+              <p className="whitespace-pre-wrap text-gray-600">
                 {selectedNote.content || (
                   <span className="italic text-gray-300">Pas de contenu.</span>
                 )}
               </p>
             </>
           ) : (
-            <p className="text-gray-300 italic text-sm">
-              Sélectionne une note pour la lire.
+            <p className="text-sm italic text-gray-300">
+              Selectionne une note pour la lire.
             </p>
           )}
         </div>
